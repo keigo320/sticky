@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>ふせんペタペタ</title>
+    <style>
+        body { margin: 0; background: #f0f0f0; overflow: hidden; touch-action: none; height: 100vh; }
+
+        #clear-btn {
+            position: fixed; top: 20px; right: 20px; z-index: 1000;
+            padding: 15px 25px; background: #ff4d4d; color: white;
+            border: none; border-radius: 8px; cursor: pointer;
+        }
+
+        /* 付箋のデザインと文字の挙動を完全に制御（重複定義を一本化） */
+        .post-it {
+            width: 150px !important;
+            height: 150px !important;
+            position: absolute !important;
+
+            /* 文字配置：左上から開始（display:blockでOK、text-alignは横方向のみ） */
+            display: block !important;
+            text-align: left !important;
+            padding: 10px !important;
+
+            /* ボックスモデル：paddingを含めて150pxにする */
+            box-sizing: border-box !important;
+
+            /* はみ出し防止と自動折り返し */
+            word-wrap: break-word !important;
+            overflow-wrap: break-word !important;
+            white-space: pre-wrap !important;
+
+            /* 枠内に収める（スクロールバーは出さない） */
+            overflow: hidden !important;
+
+            /* 基本スタイル */
+            box-shadow: 3px 3px 5px rgba(0,0,0,0.1);
+            user-select: none;
+            font-family: sans-serif !important;
+            outline: none;
+            cursor: text;
+            z-index: 1;
+
+            /* 長押し時のiOS/Android系コンテキストメニュー抑止 */
+            -webkit-touch-callout: none !important;
+            -webkit-user-select: none !important;
+        }
+
+        .pink { background: #ffcccc; }
+        .yellow { background: #ffffcc; }
+        .blue { background: #ccffff; }
+        .green { background: #ccffcc; }
+
+        .progress {
+            position: absolute !important;
+            bottom: 0 !important; left: 0 !important;
+            width: 100% !important; height: 0% !important;
+            background: rgba(0,0,0,0.2) !important;
+            pointer-events: none !important;
+            z-index: 0 !important;
+        }
+
+        /* ハンドル専用スタイル */
+        .handle {
+            position: absolute !important;
+            bottom: 0px !important;
+            right: 0px !important;
+            width: 30px !important;
+            height: 30px !important;
+            background: rgba(0,0,0,0.1) !important;
+            cursor: move !important;
+            border-top-left-radius: 8px !important;
+            z-index: 2 !important;
+        }
+    </style>
+</head>
+<body>
+    <button id="clear-btn">全はがし</button>
+    <script>
+        const LONG_PRESS_DURATION = 700;
+        const INTERVAL_MS = 50;
+        const steps = LONG_PRESS_DURATION / INTERVAL_MS;
+        const colors = ['pink', 'yellow', 'blue', 'green'];
+        const soundStick = new Audio('sound/付箋貼る.wav');
+        const soundClear = new Audio('sound/リセット.mp3');
+        const soundDelete = new Audio('sound/一つ削除.mp3');
+
+        const DEFAULT_FONT_SIZE = 16;
+        const MIN_FONT_SIZE = 8;
+
+        // 文字が枠に収まるようにフォントサイズを自動調整
+        function fitText(div) {
+            div.style.fontSize = DEFAULT_FONT_SIZE + 'px';
+            let fontSize = DEFAULT_FONT_SIZE;
+            while (div.scrollHeight > div.clientHeight && fontSize > MIN_FONT_SIZE) {
+                fontSize -= 1;
+                div.style.fontSize = fontSize + 'px';
+            }
+        }
+
+        // 付箋を作成するメイン関数
+        function createNote(text = "", left = "100px", top = "100px", colorClass = "", fontSize = "") {
+            const div = document.createElement('div');
+            div.style.left = left;
+            div.style.top = top;
+            div.contentEditable = true;
+            div.className = colorClass || `post-it ${colors[Math.floor(Math.random() * colors.length)]}`;
+            div.style.fontSize = fontSize || (DEFAULT_FONT_SIZE + 'px');
+
+            const prog = document.createElement('div');
+            prog.className = 'progress';
+            prog.contentEditable = "false";
+            div.appendChild(prog);
+
+            const handle = document.createElement('div');
+            handle.className = 'handle';
+            handle.contentEditable = "false";
+            div.appendChild(handle);
+
+            // テキストはprog/handleの前に挿入して、文字入力位置を安定させる
+            if (text) {
+                div.insertBefore(document.createTextNode(text), prog);
+            }
+
+            let timer, count = 0;
+
+            // 移動用ハンドル
+            handle.onpointerdown = (e) => {
+                e.stopPropagation();
+                div.setPointerCapture(e.pointerId);
+                div.onpointermove = (ev) => {
+                    div.style.left = (ev.clientX - 75) + 'px';
+                    div.style.top = (ev.clientY - 75) + 'px';
+                    saveNotes();
+                };
+            };
+
+            // 削除用長押し
+            div.onpointerdown = (e) => {
+                if (e.target === handle || document.activeElement === div) return;
+                div.setPointerCapture(e.pointerId);
+                timer = setInterval(() => {
+                    count++;
+                    prog.style.height = (count / steps * 100) + '%';
+                    if(count >= steps) {
+                        clearInterval(timer);
+                        soundDelete.play();
+                        div.remove();
+                        saveNotes();
+                    }
+                }, INTERVAL_MS);
+            };
+
+            div.onpointerup = () => {
+                clearInterval(timer);
+                count = 0;
+                prog.style.height = '0%';
+                div.onpointermove = null;
+            };
+
+            div.oninput = () => {
+                fitText(div);
+                saveNotes();
+            };
+
+            document.body.appendChild(div);
+            fitText(div);
+        }
+
+        // innerTextを使うとprog/handleの文字列表現まで巻き込むことがあるため、
+        // テキストノードだけを抽出して保存する
+        function getNoteText(div) {
+            let text = '';
+            div.childNodes.forEach(node => {
+                if (node.nodeType === Node.TEXT_NODE) {
+                    text += node.textContent;
+                } else if (node.nodeType === Node.ELEMENT_NODE &&
+                           !node.classList.contains('progress') &&
+                           !node.classList.contains('handle')) {
+                    text += node.textContent;
+                }
+            });
+            return text;
+        }
+
+        function saveNotes() {
+            const notes = [];
+            document.querySelectorAll('.post-it').forEach(p => {
+                notes.push({
+                    text: getNoteText(p),
+                    left: p.style.left,
+                    top: p.style.top,
+                    className: p.className,
+                    fontSize: p.style.fontSize
+                });
+            });
+            localStorage.setItem('myStickyNotes', JSON.stringify(notes));
+        }
+
+        document.getElementById('clear-btn').addEventListener('pointerdown', (e) => {
+            soundClear.play();
+            document.querySelectorAll('.post-it').forEach(p => p.remove());
+            saveNotes();
+        });
+
+        document.body.addEventListener('click', (e) => {
+            if(e.target.id === 'clear-btn' || e.target.classList.contains('post-it') || e.target.className === 'handle') return;
+            soundStick.currentTime = 0; soundStick.play();
+            createNote("", (e.clientX - 75) + 'px', (e.clientY - 75) + 'px');
+            saveNotes();
+        });
+
+        window.onload = () => {
+            const saved = localStorage.getItem('myStickyNotes');
+            if (saved) JSON.parse(saved).forEach(n => createNote(n.text, n.left, n.top, n.className, n.fontSize));
+        };
+
+        document.addEventListener('contextmenu', (e) => e.preventDefault());
+    </script>
+</body>
+</html>
