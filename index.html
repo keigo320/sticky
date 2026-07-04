@@ -12,13 +12,13 @@
             border: none; border-radius: 8px; cursor: pointer;
         }
 
-        /* 付箋のデザインと文字の挙動を完全に制御（重複定義を一本化） */
+        /* 付箋のデザインと文字の挙動を完全に制御 */
         .post-it {
             width: 150px !important;
             height: 150px !important;
             position: absolute !important;
 
-            /* 文字配置：左上から開始（display:blockでOK、text-alignは横方向のみ） */
+            /* 文字配置：左上から開始 */
             display: block !important;
             text-align: left !important;
             padding: 10px !important;
@@ -52,16 +52,7 @@
         .blue { background: #ccffff; }
         .green { background: #ccffcc; }
 
-        .progress {
-            position: absolute !important;
-            bottom: 0 !important; left: 0 !important;
-            width: 100% !important; height: 0% !important;
-            background: rgba(0,0,0,0.2) !important;
-            pointer-events: none !important;
-            z-index: 0 !important;
-        }
-
-        /* ハンドル専用スタイル */
+        /* ハンドル専用スタイル（ドラッグ開始点） */
         .handle {
             position: absolute !important;
             bottom: 0px !important;
@@ -73,18 +64,47 @@
             border-top-left-radius: 8px !important;
             z-index: 2 !important;
         }
+
+        /* ドラッグ中に画面下から出てくるゴミ箱ゾーン */
+        #trash-zone {
+            position: fixed;
+            bottom: -140px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 120px;
+            height: 120px;
+            background: #ff4d4d;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 48px;
+            color: white;
+            z-index: 2000;
+            transition: bottom 0.2s ease, background 0.15s ease, transform 0.15s ease;
+            pointer-events: none;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        #trash-zone.active {
+            bottom: 30px;
+        }
+        #trash-zone.hover {
+            background: #cc0000;
+            transform: translateX(-50%) scale(1.15);
+        }
     </style>
 </head>
 <body>
     <button id="clear-btn">全はがし</button>
+    <div id="trash-zone">🗑️</div>
+
     <script>
-        const LONG_PRESS_DURATION = 700;
-        const INTERVAL_MS = 50;
-        const steps = LONG_PRESS_DURATION / INTERVAL_MS;
         const colors = ['pink', 'yellow', 'blue', 'green'];
         const soundStick = new Audio('sound/付箋貼る.wav');
         const soundClear = new Audio('sound/リセット.mp3');
         const soundDelete = new Audio('sound/一つ削除.mp3');
+
+        const trash = document.getElementById('trash-zone');
 
         const DEFAULT_FONT_SIZE = 16;
         const MIN_FONT_SIZE = 8;
@@ -99,6 +119,12 @@
             }
         }
 
+        // ポインター座標がゴミ箱の上に乗っているか判定
+        function isOverTrash(x, y) {
+            const rect = trash.getBoundingClientRect();
+            return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+        }
+
         // 付箋を作成するメイン関数
         function createNote(text = "", left = "100px", top = "100px", colorClass = "", fontSize = "") {
             const div = document.createElement('div');
@@ -108,55 +134,44 @@
             div.className = colorClass || `post-it ${colors[Math.floor(Math.random() * colors.length)]}`;
             div.style.fontSize = fontSize || (DEFAULT_FONT_SIZE + 'px');
 
-            const prog = document.createElement('div');
-            prog.className = 'progress';
-            prog.contentEditable = "false";
-            div.appendChild(prog);
-
             const handle = document.createElement('div');
             handle.className = 'handle';
             handle.contentEditable = "false";
             div.appendChild(handle);
 
-            // テキストはprog/handleの前に挿入して、文字入力位置を安定させる
+            // テキストはhandleより前に挿入して、文字入力位置を安定させる
             if (text) {
-                div.insertBefore(document.createTextNode(text), prog);
+                div.insertBefore(document.createTextNode(text), handle);
             }
 
-            let timer, count = 0;
-
-            // 移動用ハンドル
+            // ドラッグ開始（ハンドルをつかむ）
             handle.onpointerdown = (e) => {
                 e.stopPropagation();
                 div.setPointerCapture(e.pointerId);
+                trash.classList.add('active');
+
                 div.onpointermove = (ev) => {
                     div.style.left = (ev.clientX - 75) + 'px';
                     div.style.top = (ev.clientY - 75) + 'px';
-                    saveNotes();
-                };
-            };
 
-            // 削除用長押し
-            div.onpointerdown = (e) => {
-                if (e.target === handle || document.activeElement === div) return;
-                div.setPointerCapture(e.pointerId);
-                timer = setInterval(() => {
-                    count++;
-                    prog.style.height = (count / steps * 100) + '%';
-                    if(count >= steps) {
-                        clearInterval(timer);
+                    if (isOverTrash(ev.clientX, ev.clientY)) {
+                        trash.classList.add('hover');
+                    } else {
+                        trash.classList.remove('hover');
+                    }
+                };
+
+                div.onpointerup = (ev) => {
+                    trash.classList.remove('active', 'hover');
+                    div.onpointermove = null;
+                    div.onpointerup = null;
+
+                    if (isOverTrash(ev.clientX, ev.clientY)) {
                         soundDelete.play();
                         div.remove();
-                        saveNotes();
                     }
-                }, INTERVAL_MS);
-            };
-
-            div.onpointerup = () => {
-                clearInterval(timer);
-                count = 0;
-                prog.style.height = '0%';
-                div.onpointermove = null;
+                    saveNotes();
+                };
             };
 
             div.oninput = () => {
@@ -168,7 +183,7 @@
             fitText(div);
         }
 
-        // innerTextを使うとprog/handleの文字列表現まで巻き込むことがあるため、
+        // innerTextを使うとhandleの文字列表現まで巻き込むことがあるため、
         // テキストノードだけを抽出して保存する
         function getNoteText(div) {
             let text = '';
@@ -176,7 +191,6 @@
                 if (node.nodeType === Node.TEXT_NODE) {
                     text += node.textContent;
                 } else if (node.nodeType === Node.ELEMENT_NODE &&
-                           !node.classList.contains('progress') &&
                            !node.classList.contains('handle')) {
                     text += node.textContent;
                 }
